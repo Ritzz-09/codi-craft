@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Codi Craft</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="stars"></canvas>
+  <div class="aurora-layer" aria-hidden="true">
+    <span class="aurora aurora-one"></span>
+    <span class="aurora aurora-two"></span>
+    <span class="aurora aurora-three"></span>
+  </div>
+  <div class="scene-3d" aria-hidden="true">
+    <div class="grid-plane grid-back"></div>
+    <div class="grid-plane grid-front"></div>
+    <div class="orb orb-one"></div>
+    <div class="orb orb-two"></div>
+    <div class="orb orb-three"></div>
+    <div class="beam beam-left"></div>
+    <div class="beam beam-right"></div>
+  </div>
+
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="brand">
+        <img src="symbol.png" alt="Codi Craft logo" class="logo">
+        <div>
+          <h1>Codi Craft</h1>
+        </div>
+      </div>
+      <div class="topbar-meta">
+        <span class="status-pill" id="backendStatusPill">
+          <span class="status-dot" id="backendStatusDot"></span>
+          <span id="backendStatusText">Checking AI status...</span>
+        </span>
+        <button class="ghost-btn" id="surpriseBtn" type="button">Surprise Me</button>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="composer-panel glass-card">
+        <div class="hero-copy">
+          <p class="section-tag">Prompt Builder</p>
+          <h2>Prompt. Build. Ship.</h2>
+          <p class="hero-text">
+            Pick options. Generate code.
+          </p>
+        </div>
+
+        <div class="studio-summary">
+          <article class="summary-card">
+            <span>Mode</span>
+            <strong id="modeBadge">Code</strong>
+          </article>
+          <article class="summary-card">
+            <span>Target</span>
+            <strong id="languageBadge">JavaScript</strong>
+          </article>
+        </div>
+
+        <div class="learning-hub">
+          <article class="learning-card learning-card-feature">
+            <p class="section-tag">Student Studio</p>
+            <h3>Learn by building, not by memorizing.</h3>
+            <p>Turn plain-English ideas into code, explanations, and next learning steps that feel approachable.</p>
+          </article>
+          <article class="learning-card">
+            <span>Prompt recipe</span>
+            <strong id="promptRecipe">Goal + input + output</strong>
+            <p id="promptRecipeHint">Say what the program should do, what it starts with, and what it should show.</p>
+          </article>
+          <article class="learning-card">
+            <span>Learning focus</span>
+            <strong id="learningFocus">One idea at a time</strong>
+            <p id="learningFocusHint">Short, specific prompts create the easiest code to understand.</p>
+          </article>
+        </div>
+
+        <div class="prompt-grid">
+          <div class="control-card control-card-wide">
+            <label class="field field-lg">
+              <span>What should we build?</span>
+              <textarea id="prompt" rows="6" placeholder="Build a responsive pricing section with three cards, animated toggle, and clean semantic HTML."></textarea>
+            </label>
+          </div>
+
+          <div class="control-card control-card-wide">
+            <div class="field">
+              <span>Reference Files & Photos</span>
+              <div class="attachment-toolbar">
+                <input id="attachmentInput" type="file" accept=".txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.java,.cpp,.c,.cs,.go,.rs,.php,.rb,.swift,.kt,.kts,.html,.css,.scss,.sql,.xml,.yaml,.yml,.csv,image/*" multiple hidden>
+                <button class="ghost-btn" id="attachBtn" type="button">Add Files or Photos</button>
+                <p class="attachment-helper" id="attachmentHelper">Attach code files, notes, or screenshots to guide the next generation. You can also paste an image from the clipboard.</p>
+              </div>
+              <div class="attachment-list" id="attachmentList">
+                <div class="attachment-empty">No reference files added yet.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Task</span>
+              <select id="editAction">
+                <option value="generate">Generate</option>
+                <option value="fix">Fix</option>
+                <option value="refactor">Refactor</option>
+                <option value="explain">Explain Through Code</option>
+                <option value="extend">Extend</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Language</span>
+              <select id="language">
+                <option>JavaScript</option>
+                <option>TypeScript</option>
+                <option>Python</option>
+                <option>HTML/CSS</option>
+                <option>React</option>
+                <option>Node.js</option>
+                <option>C</option>
+                <option>C++</option>
+                <option>C#</option>
+                <option>Go</option>
+                <option>Rust</option>
+                <option>Java</option>
+                <option>Kotlin</option>
+                <option>Swift</option>
+                <option>PHP</option>
+                <option>Ruby</option>
+                <option>Dart</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Framework</span>
+              <select id="framework">
+                <option>None</option>
+                <option>React</option>
+                <option>Next.js</option>
+                <option>Vue</option>
+                <option>Flask</option>
+                <option>Express</option>
+                <option>Tailwind</option>
+                <option>Vanilla</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Style</span>
+              <select id="tone">
+                <option>Production-ready</option>
+                <option>Minimal</option>
+                <option>Readable</option>
+                <option>Fast prototype</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Complexity</span>
+              <input id="complexity" type="range" min="1" max="3" value="2">
+              <div class="range-labels">
+                <span>Starter</span>
+                <span id="complexityLabel">Balanced</span>
+                <span>Advanced</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Output Mode</span>
+              <div class="toggle-group" id="modeToggle">
+                <button class="toggle-chip active" type="button" data-mode="code">Code</button>
+                <button class="toggle-chip" type="button" data-mode="component">Component</button>
+                <button class="toggle-chip" type="button" data-mode="api">API</button>
+                <button class="toggle-chip" type="button" data-mode="leetcode">LeetCode</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Studio Mode</span>
+              <div class="toggle-group" id="studioModeToggle">
+                <button class="toggle-chip active" type="button" data-studio-mode="standard">Standard</button>
+                <button class="toggle-chip" type="button" data-studio-mode="learning">Learning</button>
+                <button class="toggle-chip" type="button" data-studio-mode="interview">Interview</button>
+                <button class="toggle-chip" type="button" data-studio-mode="submission">Submission</button>
+                <button class="toggle-chip" type="button" data-studio-mode="ui-builder">UI Builder</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Workspace</span>
+              <input id="workspaceName" type="text" placeholder="Personal workspace">
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Focus File</span>
+              <select id="focusFileSelect">
+                <option value="">Auto</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-card" id="leetcodeProblemCard" hidden>
+            <label class="field">
+              <span>LeetCode Problem #</span>
+              <input id="leetcodeProblemId" type="text" inputmode="numeric" placeholder="e.g. 1">
+            </label>
+            <label class="field">
+              <span>Question Name</span>
+              <input id="leetcodeQuestionName" type="text" placeholder="e.g. Two Sum">
+            </label>
+          </div>
+
+          <div class="control-card">
+            <label class="field">
+              <span>Compare Mode</span>
+              <button class="ghost-btn toggle-compare" id="compareBtn" type="button" aria-pressed="false">Off</button>
+            </label>
+          </div>
+
+          <div class="control-card control-card-wide">
+            <div class="field">
+              <span>Strict Controls</span>
+              <div class="strict-options">
+                <label class="strict-option">
+                  <input id="strictNoLibraries" type="checkbox">
+                  <span>No External Libraries</span>
+                </label>
+                <label class="strict-option">
+                  <input id="strictRunnableOutput" type="checkbox">
+                  <span>Runnable Output Required</span>
+                </label>
+                <label class="strict-option">
+                  <input id="strictSingleFile" type="checkbox">
+                  <span>Single File Only</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="control-card control-card-wide">
+            <div class="field">
+              <span>Run Input & Test Cases</span>
+              <textarea id="testCasesInput" rows="4" placeholder="Optional input or sample test cases. Example:&#10;5&#10;1 2 3 4 5"></textarea>
+              <input id="expectedOutputInput" type="text" placeholder="Optional expected output">
+            </div>
+          </div>
+        </div>
+
+        <div class="preset-block">
+          <div class="block-heading">
+            <h3>Quick start prompts</h3>
+            <p>Tap one and we will prefill the brief.</p>
+          </div>
+          <div class="chip-row" id="presetChips">
+            <button class="prompt-chip" type="button" data-template="Create a {{language}} program that takes 5 numbers from the user and stores them in an array.">Array input</button>
+            <button class="prompt-chip" type="button" data-template="Create a {{language}} program with a for loop that prints a name 5 times.">Loop practice</button>
+            <button class="prompt-chip" type="button" data-template="Write a {{language}} program to find the largest number in a list and print the result.">Largest number</button>
+            <button class="prompt-chip" type="button" data-template="Build a {{language}} 2D array example using simple nested loops.">2D array</button>
+          </div>
+        </div>
+
+          <div class="action-row">
+            <div class="micro-stats">
+            <div>
+              <span class="stat-label">Prompt health</span>
+              <strong id="promptHealth">Strong</strong>
+            </div>
+            <div>
+              <span class="stat-label">Estimated output</span>
+              <strong id="outputEstimate">Medium</strong>
+            </div>
+            </div>
+            <div class="action-buttons">
+              <button class="ghost-btn" id="clearBtn" type="button">Clear</button>
+              <button class="ghost-btn" id="voicePromptBtn" type="button">Voice Prompt</button>
+              <button class="primary-btn" id="generateBtn" type="button">Generate Code</button>
+            </div>
+          </div>
+      </section>
+
+      <section class="preview-panel">
+        <div class="glass-card preview-card">
+          <div class="preview-top">
+            <div class="preview-headline">
+              <p class="section-tag">Live Output</p>
+              <h3 id="previewTitle">Generated Code</h3>
+              <div class="editor-meta">
+                <span class="meta-pill" id="editorLanguage">JavaScript</span>
+                <span class="meta-pill" id="editorComplexity">Balanced</span>
+                <span class="meta-pill" id="editorIntent">Intent: Generate</span>
+                <span class="meta-pill" id="editorStudioMode">Studio: Standard</span>
+                <span class="meta-pill" id="editorStrict">Strict: None</span>
+              </div>
+            </div>
+            <div class="preview-controls">
+              <div class="preview-mode">
+                <label class="field compact-field" for="explainMode">
+                  <span>Explain Mode</span>
+                  <select id="explainMode">
+                    <option value="quick">Quick</option>
+                    <option value="student" selected>Student</option>
+                    <option value="beginner">Beginner</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                </label>
+              </div>
+              <div class="preview-actions-grid">
+                <button class="ghost-btn" id="copyBtn" type="button">Copy</button>
+                <button class="ghost-btn" id="downloadBtn" type="button">Download</button>
+                <button class="ghost-btn" id="repairBtn" type="button">Repair Code</button>
+                <button class="ghost-btn" id="copyExplainBtn" type="button">Copy Notes</button>
+                <button class="ghost-btn" id="downloadExplainBtn" type="button">Save Notes</button>
+                <button class="ghost-btn" id="saveProjectBtn" type="button">Save Project</button>
+                <button class="ghost-btn" id="exportBtn" type="button">Export Project</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="generation-status" id="generationStatus">
+            <div class="progress-track">
+              <span id="progressBar"></span>
+            </div>
+            <div class="status-line">
+              <span id="statusText">Waiting for your prompt.</span>
+              <span id="statusMeta">Idle</span>
+            </div>
+          </div>
+
+          <div class="warning-strip" id="warningStrip" hidden>
+            <strong>Generation warnings</strong>
+            <div class="warning-list" id="warningList"></div>
+          </div>
+
+          <div class="mentor-strip">
+            <article class="mentor-card">
+              <span>Concept focus</span>
+              <strong id="mentorConcept">Variables and output</strong>
+              <p id="mentorConceptHint">Start by seeing what the program stores and what it prints or returns.</p>
+            </article>
+            <article class="mentor-card">
+              <span>Difficulty</span>
+              <strong id="mentorDifficulty">Student friendly</strong>
+              <p id="mentorDifficultyHint">This workspace is designed to keep code understandable before making it clever.</p>
+            </article>
+            <article class="mentor-card">
+              <span>Next study step</span>
+              <strong id="mentorNextStep">Generate one small program</strong>
+              <p id="mentorNextStepHint">Then switch to Student explain mode and follow the steps in order.</p>
+            </article>
+          </div>
+
+          <div class="output-tabs" id="outputTabs">
+            <button class="output-tab active" type="button" data-tab="code">Code</button>
+            <button class="output-tab" type="button" data-tab="editor">Editor</button>
+            <button class="output-tab" type="button" data-tab="diff">Diff</button>
+            <button class="output-tab" type="button" data-tab="explain">Explain</button>
+            <button class="output-tab" type="button" data-tab="diagnostics">Diagnostics</button>
+            <button class="output-tab" type="button" data-tab="tests">Tests</button>
+            <button class="output-tab" type="button" data-tab="quiz">Quiz</button>
+            <button class="output-tab" type="button" data-tab="preview">Preview</button>
+            <button class="output-tab" type="button" data-tab="files">Files</button>
+            <button class="output-tab" type="button" data-tab="request">Request</button>
+            <button class="output-tab" type="button" data-tab="structure">Structure</button>
+          </div>
+
+          <div class="variant-tabs" id="variantTabs"></div>
+          <div class="file-tabs" id="fileTabs"></div>
+
+          <div class="code-window">
+            <div class="window-bar">
+              <span></span>
+              <span></span>
+              <span></span>
+              <code id="fileName">snippet.js</code>
+            </div>
+            <div class="output-panel active" id="tab-code">
+              <pre id="code"><code id="codeContent">// Your generated result will appear here.</code></pre>
+            </div>
+            <div class="output-panel" id="tab-editor">
+              <textarea id="editorArea" spellcheck="false">// Your generated result will appear here.</textarea>
+            </div>
+            <div class="output-panel" id="tab-diff">
+              <div class="diff-layout">
+                <div class="diff-summary" id="diffSummary">Compare mode differences will appear here.</div>
+                <div class="diff-columns">
+                  <pre id="diffLeft">Variant A will appear here.</pre>
+                  <pre id="diffRight">Variant B will appear here.</pre>
+                </div>
+              </div>
+            </div>
+            <div class="output-panel" id="tab-explain">
+              <pre id="explainView">Code explanation will appear here.</pre>
+            </div>
+            <div class="output-panel" id="tab-diagnostics">
+              <pre id="diagnosticsView">Diagnostics will appear here.</pre>
+            </div>
+            <div class="output-panel" id="tab-tests">
+              <pre id="testsView">Test guidance will appear here.</pre>
+            </div>
+            <div class="output-panel" id="tab-quiz">
+              <pre id="quizView">Study quiz will appear here.</pre>
+            </div>
+            <div class="output-panel" id="tab-preview">
+              <iframe id="previewFrame" title="Generated preview"></iframe>
+            </div>
+            <div class="output-panel" id="tab-files">
+              <pre id="filesView">Generated files will appear here.</pre>
+            </div>
+            <div class="output-panel" id="tab-request">
+              <pre id="requestView">Prompt details will appear here.</pre>
+            </div>
+            <div class="output-panel" id="tab-structure">
+              <pre id="structureView">Generated file structure will appear here.</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="glass-card insights-card">
+          <div class="block-heading">
+            <h3>Generation Notes</h3>
+            <p>Interactive cues to help refine the next run.</p>
+          </div>
+          <div class="insight-list" id="insightList">
+            <article class="insight-item">
+              <span>Focus</span>
+              <strong>Add constraints like framework, layout, and data shape.</strong>
+            </article>
+            <article class="insight-item">
+              <span>Tip</span>
+              <strong>Specific UI states usually lead to better frontend code.</strong>
+            </article>
+            <article class="insight-item">
+              <span>Workflow</span>
+              <strong>Generate once, then tighten the prompt instead of starting over.</strong>
+            </article>
+          </div>
+        </div>
+
+        <div class="glass-card insights-card">
+          <div class="block-heading">
+            <h3>Learning Roadmap</h3>
+            <p>Small steps students can use after every generation.</p>
+          </div>
+          <div class="roadmap-list" id="learningRoadmap">
+            <article class="roadmap-item">
+              <span>1</span>
+              <div>
+                <strong>Ask for one tiny result</strong>
+                <p>Example: print names, add numbers, or show a message.</p>
+              </div>
+            </article>
+            <article class="roadmap-item">
+              <span>2</span>
+              <div>
+                <strong>Read Student Explain mode first</strong>
+                <p>Understand the idea before trying to decode the syntax.</p>
+              </div>
+            </article>
+            <article class="roadmap-item">
+              <span>3</span>
+              <div>
+                <strong>Change one small thing</strong>
+                <p>Edit one value, one loop, or one condition and watch what changes.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="glass-card insights-card">
+          <div class="block-heading">
+            <h3>Projects</h3>
+            <p>Saved locally in this browser.</p>
+          </div>
+          <div class="project-actions">
+            <button class="ghost-btn" id="loadProjectBtn" type="button">Load Saved Project</button>
+          </div>
+          <div class="history-list" id="savedProjectsList">
+            <article class="history-empty">No saved projects yet.</article>
+          </div>
+        </div>
+
+        <div class="glass-card insights-card">
+          <div class="block-heading">
+            <h3>Recent History</h3>
+            <p>Stored locally in this browser.</p>
+          </div>
+          <div class="history-list" id="historyList">
+            <article class="history-empty">No generations yet.</article>
+          </div>
+        </div>
+
+        <div class="glass-card insights-card">
+          <div class="block-heading">
+            <h3>Prompt Versions</h3>
+            <p>Prompt snapshots from recent runs.</p>
+          </div>
+          <div class="history-list" id="promptVersionsList">
+            <article class="history-empty">No prompt versions yet.</article>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js?v=2026-04-03-strict-layout-2"></script>
+</body>
+</html>
