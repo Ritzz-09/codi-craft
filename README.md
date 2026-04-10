@@ -145,12 +145,15 @@ You can also use VS Code Live Server if you prefer.
 
 ## Screenshots
 
-Add your UI screenshots here after capturing the best views of the app.
+### Prompt Builder Dashboard
 
-Suggested screenshots:
-- Main prompt builder screen
-- Generated code and explanation view
-- Learning or LeetCode mode in action
+![Codi Craft prompt builder dashboard](./assets/screenshots/home.png)
+
+## Demo Video
+
+Watch the local prototype demo here:
+
+[Codi Craft demo video](./assets/videos/demo.mp4)
 
 ## License
 
