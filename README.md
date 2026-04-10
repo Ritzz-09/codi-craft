@@ -1,5 +1,10 @@
 # Codi Craft
 
+![Project Status](https://img.shields.io/badge/status-prototype-blue)
+![Frontend](https://img.shields.io/badge/frontend-HTML%20%7C%20CSS%20%7C%20JavaScript-orange)
+![Backend](https://img.shields.io/badge/backend-Flask-green)
+![License](https://img.shields.io/badge/license-All%20Rights%20Reserved-red)
+
 Codi Craft is an AI-powered coding assistant prototype that turns natural-language prompts into code, explanations, and structured coding help. It combines a static frontend with a Flask backend and uses Groq for generation.
 
 ## Overview
@@ -133,6 +138,7 @@ You can also use VS Code Live Server if you prefer.
 - `backend/.env` is ignored and should stay local
 - `backend/.env.example` shows the expected configuration shape
 - This project currently uses local browser storage instead of shared cloud persistence
+- This code is shared for portfolio viewing only; see [NOTICE.md](./NOTICE.md)
 
 ## Roadmap
 
@@ -145,4 +151,4 @@ You can also use VS Code Live Server if you prefer.
 
 ## License
 
-No license has been added yet. If you plan to make this project public for reuse, consider adding one later.
+This project is not open source. It is shared publicly for portfolio and demonstration purposes only. See [NOTICE.md](./NOTICE.md).
