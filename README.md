@@ -143,18 +143,6 @@ You can also use VS Code Live Server if you prefer.
 - Add billing and plan controls
 - Expand vision and screenshot-to-code support
 
-## Screenshots
-
-### Prompt Builder Dashboard
-
-![Codi Craft prompt builder dashboard](./assets/screenshots/home.png)
-
-## Demo Video
-
-Watch the local prototype demo here:
-
-[Codi Craft demo video](./assets/videos/demo.mp4)
-
 ## License
 
 No license has been added yet. If you plan to make this project public for reuse, consider adding one later.
