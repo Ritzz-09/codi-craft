@@ -7,18 +7,22 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
+import uuid
 from collections import defaultdict, deque
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from groq import Groq
+from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config["DEV_ERROR_DETAILS"] = os.getenv("DEV_ERROR_DETAILS", "true").lower() == "true"
 
 
 def load_local_env():
@@ -38,16 +42,39 @@ def load_local_env():
 
 load_local_env()
 
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+IS_PRODUCTION = APP_ENV == "production"
+app.config["DEV_ERROR_DETAILS"] = os.getenv("DEV_ERROR_DETAILS", str(not IS_PRODUCTION)).lower() == "true"
+app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+if TRUST_PROXY_HEADERS:
+    # Enable only when the deployment's reverse proxy is configured to overwrite X-Forwarded-* headers.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 MAX_PROMPT_LENGTH = 8000
 MAX_ATTACHMENTS = 5
 MAX_ATTACHMENT_TEXT_LENGTH = 5000
 MAX_TOTAL_ATTACHMENT_TEXT_LENGTH = 16000
-DEFAULT_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+MAX_IMAGE_DATA_URL_LENGTH = int(os.getenv("MAX_IMAGE_DATA_URL_LENGTH", "700000"))
+MAX_ATTACHMENT_NAME_LENGTH = 255
+ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 DEFAULT_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.25"))
+GROQ_REQUEST_TIMEOUT_SECONDS = float(os.getenv("GROQ_REQUEST_TIMEOUT_SECONDS", "45"))
+GROQ_MAX_RETRIES = int(os.getenv("GROQ_MAX_RETRIES", "2"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "8"))
 RUN_TIMEOUT_SECONDS = int(os.getenv("RUN_TIMEOUT_SECONDS", "6"))
+MAX_RUN_CODE_LENGTH = int(os.getenv("MAX_RUN_CODE_LENGTH", "30000"))
+MAX_RUN_STDIN_LENGTH = int(os.getenv("MAX_RUN_STDIN_LENGTH", "8000"))
+ENABLE_CODE_EXECUTION = os.getenv("ENABLE_CODE_EXECUTION", "false").lower() == "true"
+SUPPORTED_AI_PROVIDERS = {"groq", "openai", "anthropic", "gemini"}
+DEFAULT_PROVIDER_MODELS = {
+    "groq": "llama-3.3-70b-versatile",
+    "openai": "gpt-4.1-mini",
+    "anthropic": "claude-sonnet-4-20250514",
+    "gemini": "gemini-2.5-flash",
+}
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -56,6 +83,23 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+
+
+def validate_deployment_configuration():
+    if not IS_PRODUCTION:
+        return
+
+    errors = []
+    if app.config["DEV_ERROR_DETAILS"]:
+        errors.append("DEV_ERROR_DETAILS must be false in production")
+    if not ALLOWED_ORIGINS:
+        errors.append("ALLOWED_ORIGINS must contain at least one HTTPS origin in production")
+    elif any(not origin.startswith("https://") for origin in ALLOWED_ORIGINS):
+        errors.append("ALLOWED_ORIGINS must contain HTTPS origins only in production")
+    if ENABLE_CODE_EXECUTION:
+        errors.append("ENABLE_CODE_EXECUTION must remain false on the API deployment; use an isolated runner")
+    if errors:
+        raise RuntimeError("Invalid production configuration: " + "; ".join(errors))
 
 EDIT_ACTIONS = {"generate", "fix", "refactor", "explain", "extend"}
 RUNNABLE_LANGUAGES = {
@@ -144,7 +188,7 @@ LANGUAGE_GUARDRAILS = {
     "python": (
         "Use valid Python syntax only. Every generated file must be Python when Python is requested. "
         "Never use JavaScript syntax such as console.log, let, const, semicolons as statement terminators, or curly-brace for-loops. "
-        "Use print() for output, def for functions, and indentation-based blocks."
+        "Use def for functions and indentation-based blocks. Use print() only when the user explicitly asks for console output."
     ),
     "javascript": (
         "Use valid JavaScript syntax only. Every generated file must be JavaScript when JavaScript is requested. "
@@ -238,19 +282,20 @@ CORS(
 )
 
 
-def create_groq_client():
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        return None
-    return Groq(api_key=api_key)
+def create_groq_client(api_key):
+    return Groq(
+        api_key=api_key,
+        timeout=GROQ_REQUEST_TIMEOUT_SECONDS,
+        max_retries=GROQ_MAX_RETRIES,
+    )
 
 
-client = create_groq_client()
+validate_deployment_configuration()
 request_log = defaultdict(deque)
 
 
 def error_response(message, status_code, extra=None, headers=None):
-    payload = {"error": message, "code": ""}
+    payload = {"error": message, "code": "", "request_id": getattr(g, "request_id", "")}
     if extra:
         payload.update(extra)
     response = jsonify(payload)
@@ -258,6 +303,12 @@ def error_response(message, status_code, extra=None, headers=None):
         for key, value in headers.items():
             response.headers[key] = value
     return response, status_code
+
+
+@app.before_request
+def start_request_timer():
+    g.request_id = request.headers.get("X-Request-ID", "").strip()[:64] or uuid.uuid4().hex
+    g.request_started_at = time.perf_counter()
 
 
 @app.after_request
@@ -268,7 +319,33 @@ def add_cors_headers(response):
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    response.headers["X-Request-ID"] = getattr(g, "request_id", "")
+    if IS_PRODUCTION and request.is_secure:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    elapsed_ms = (time.perf_counter() - getattr(g, "request_started_at", time.perf_counter())) * 1000
+    logger.info("request_id=%s method=%s path=%s status=%s duration_ms=%.1f", g.request_id, request.method, request.path, response.status_code, elapsed_ms)
     return response
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return error_response("Request body is too large.", 413)
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(error):
+    return error_response(error.description, error.code or 500)
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    logger.exception("Unhandled server error. request_id=%s", getattr(g, "request_id", "unknown"))
+    return error_response("Internal server error.", 500)
 
 
 def validate_origin():
@@ -369,6 +446,8 @@ def validate_generate_payload(payload):
             name = attachment.get("name")
             if not isinstance(name, str) or not name.strip():
                 return "Each attachment must include a non-empty 'name'."
+            if len(name) > MAX_ATTACHMENT_NAME_LENGTH or any(ord(char) < 32 for char in name):
+                return "Attachment names must be printable and under 255 characters."
 
             kind = attachment.get("kind")
             if kind not in {"text", "image", "binary"}:
@@ -392,11 +471,32 @@ def validate_generate_payload(payload):
 
             if kind == "image":
                 data_url = attachment.get("data_url")
-                if data_url is not None and not isinstance(data_url, str):
-                    return "Image attachment field 'data_url' must be a string."
+                if not isinstance(data_url, str) or not data_url:
+                    return "Image attachments must include a data URL."
+                if len(data_url) > MAX_IMAGE_DATA_URL_LENGTH:
+                    return f"Image attachments must be under {MAX_IMAGE_DATA_URL_LENGTH} characters."
+                image_match = re.match(r"^data:([^;]+);base64,[A-Za-z0-9+/=]+$", data_url)
+                if not image_match or image_match.group(1).lower() not in ALLOWED_IMAGE_MIME_TYPES:
+                    return "Image attachments must be a PNG, JPEG, WebP, or GIF base64 data URL."
 
         if total_attachment_text > MAX_TOTAL_ATTACHMENT_TEXT_LENGTH:
             return f"Combined attachment text must be under {MAX_TOTAL_ATTACHMENT_TEXT_LENGTH} characters."
+
+    provider = payload.get("api_provider")
+    if not isinstance(provider, str) or provider.strip().lower() not in SUPPORTED_AI_PROVIDERS:
+        return "Choose a supported AI provider: Groq, OpenAI, Anthropic, or Gemini."
+
+    api_key = payload.get("api_key")
+    if not isinstance(api_key, str) or not 16 <= len(api_key.strip()) <= 512:
+        return "Enter a valid API key for the selected provider."
+
+    model = payload.get("model", "")
+    if model is not None and (
+        not isinstance(model, str)
+        or len(model.strip()) > 128
+        or not re.fullmatch(r"[A-Za-z0-9._:/-]*", model.strip())
+    ):
+        return "Model names can use letters, numbers, dots, underscores, colons, slashes, and hyphens only."
 
     return None
 
@@ -417,6 +517,9 @@ def detect_request_intent(description, payload):
 
     if leetcode_problem_id or leetcode_question_name or mode == "leetcode":
         return {"intent": "leetcode_request", "confidence": 0.99, "primary_request": primary_request}
+
+    if mode == "ascii-art":
+        return {"intent": "ascii_art_request", "confidence": 0.97, "primary_request": primary_request}
 
     if mode == "api":
         return {"intent": "api_request", "confidence": 0.95, "primary_request": primary_request}
@@ -448,7 +551,7 @@ def detect_request_intent(description, payload):
     if attachments and edit_action in {"fix", "refactor", "explain", "extend"}:
         return {"intent": f"{edit_action}_code", "confidence": 0.88, "primary_request": primary_request}
 
-    if mode in {"code", "component", "api"} and edit_action in EDIT_ACTIONS:
+    if mode in {"code", "component", "api", "ascii-art"} and edit_action in EDIT_ACTIONS:
         if framework not in {"", "none"}:
             return {"intent": "generate_code", "confidence": 0.76, "primary_request": primary_request}
         if language and language in LANGUAGE_GUARDRAILS:
@@ -504,10 +607,14 @@ def validate_run_payload(payload):
     code = payload.get("code")
     if not isinstance(code, str) or not code.strip():
         return "Field 'code' must be a non-empty string."
+    if len(code) > MAX_RUN_CODE_LENGTH:
+        return f"Field 'code' must be under {MAX_RUN_CODE_LENGTH} characters."
 
     stdin = payload.get("stdin", "")
     if stdin is not None and not isinstance(stdin, str):
         return "Field 'stdin' must be a string."
+    if isinstance(stdin, str) and len(stdin) > MAX_RUN_STDIN_LENGTH:
+        return f"Field 'stdin' must be under {MAX_RUN_STDIN_LENGTH} characters."
 
     path = payload.get("path", "")
     if path is not None and not isinstance(path, str):
@@ -517,9 +624,6 @@ def validate_run_payload(payload):
 
 
 def get_client_ip():
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
     return request.remote_addr or "unknown"
 
 
@@ -578,12 +682,18 @@ STYLE_INSTRUCTIONS = {
     "minimal": "Keep the output lean and concise. Avoid extra helpers and optional features.",
     "readable": "Optimize for clarity with descriptive names and straightforward control flow.",
     "fast prototype": "Optimize for speed of delivery and a quick working result over polish.",
+    "highly efficient": "Optimize strongly for time and space efficiency. Prefer lower-complexity algorithms, avoid unnecessary passes, allocations, or abstractions, and choose performance-conscious data structures.",
 }
 
 MODE_INSTRUCTIONS = {
     "code": "Return direct source code only, not a prose description, UI shell, or API wrapper unless requested.",
     "component": "Return reusable component-oriented output with clear inputs and UI structure.",
     "api": "Return backend or endpoint-oriented output with routes, handlers, validation, or service flow.",
+    "ascii-art": (
+        "Return source code that renders an ASCII or symbol-art result. "
+        "Prefer console or text-output code that prints the requested shape using characters such as *, #, @, ., or spaces. "
+        "Use attached images only as visual reference for the printed text-art shape, not to build HTML/CSS UI."
+    ),
     "leetcode": (
         "Return the exact solution format expected by LeetCode for the selected language. "
         "Prefer only the required class/function implementation, no extra explanation, no markdown, and no standalone driver code unless explicitly requested."
@@ -625,6 +735,75 @@ def normalize_mode(mode):
     return normalized if normalized in MODE_INSTRUCTIONS else "code"
 
 
+def default_language_extension(language):
+    language = (language or "txt").lower()
+    extension_map = {
+        "javascript": "js",
+        "typescript": "ts",
+        "python": "py",
+        "html/css": "html",
+        "react": "jsx",
+        "node.js": "js",
+        "c": "c",
+        "c++": "cpp",
+        "c#": "cs",
+        "go": "go",
+        "rust": "rs",
+        "java": "java",
+        "kotlin": "kt",
+        "swift": "swift",
+        "php": "php",
+        "ruby": "rb",
+        "dart": "dart",
+    }
+    return extension_map.get(language, "txt")
+
+
+def extract_requested_example_count(description):
+    text = (description or "").strip().lower()
+    if not text:
+        return 0
+
+    explicit_patterns = [
+        r"\b(\d+)\s+(?:different|distinct|separate|simple|basic|varied\s+)?examples?\b",
+        r"\bexamples?\s*[:\-]?\s*(\d+)\b",
+    ]
+    for pattern in explicit_patterns:
+        match = re.search(pattern, text)
+        if match:
+            return max(0, min(int(match.group(1)), 6))
+
+    plural_request = bool(
+        re.search(r"\b(multiple|many|several|few|various)\s+examples?\b", text)
+        or re.search(r"\bexamples\b", text)
+    )
+    singular_request = bool(re.search(r"\ban?\s+example\b", text))
+
+    if plural_request and not singular_request:
+        return 3
+    return 0
+
+
+def build_example_request_instruction(description, language, compare_enabled):
+    example_count = extract_requested_example_count(description)
+    if example_count <= 1:
+        return ""
+
+    extension = default_language_extension(language)
+    compare_suffix = (
+        " If compare mode is enabled, each variant must include the full example set."
+        if compare_enabled
+        else ""
+    )
+    return (
+        f"The user asked for multiple examples. Return exactly {example_count} distinct examples as separate files, "
+        f"not one combined snippet. Name them example_1.{extension} through example_{example_count}.{extension}. "
+        "Mark the clearest representative example with role 'main' and the others as role 'supporting'. "
+        "Keep each example short, runnable when appropriate, and meaningfully different in approach or use case."
+        f"{compare_suffix}"
+    )
+
+
 def normalize_framework(framework):
     normalized = (framework or "None").strip().lower()
     return normalized if normalized in FRAMEWORK_HINTS else "none"
@@ -660,10 +839,11 @@ def build_generation_policy(mode, description, edit_action="", framework="", lan
         "studio_mode": studio_mode,
         "forbid_driver_code": normalized_mode == "leetcode",
         "forbid_prose": True,
-        "require_runnable_output": strict_options.get("runnable_output_required", False) or (normalized_mode == "code" and studio_mode not in {"submission"}),
+        "require_runnable_output": strict_options.get("runnable_output_required", False),
         "prefer_beginner_structure": studio_mode == "learning",
         "prefer_ui_output": normalized_mode == "component" or studio_mode == "ui-builder",
         "prefer_api_output": normalized_mode == "api",
+        "prefer_ascii_art_output": normalized_mode == "ascii-art",
         "prefer_submission_shape": studio_mode == "submission",
         "no_external_libraries": strict_options.get("no_external_libraries", False),
         "single_file_only": strict_options.get("single_file_only", False),
@@ -685,6 +865,8 @@ def build_policy_instruction(policy):
         instructions.append("Component policy: return reusable UI/component code, not backend route handlers or server-only code.")
     if policy["mode"] == "api":
         instructions.append("API policy: return backend request/response code, not page markup or front-end-only UI output.")
+    if policy["mode"] == "ascii-art":
+        instructions.append("ASCII Art policy: return code that prints or emits recognizable text-art using symbols. Prefer a single self-contained program unless the user asks otherwise.")
     if policy["studio_mode"] == "learning":
         instructions.append("Learning policy: prefer the clearest beginner-friendly structure, avoid unnecessary libraries or clever shortcuts, and keep the logic easy to follow.")
     if policy["studio_mode"] == "submission":
@@ -694,7 +876,7 @@ def build_policy_instruction(policy):
     if policy["studio_mode"] == "interview":
         instructions.append("Interview policy: keep the solution efficient, explainable, and easy to speak through, without unnecessary cleverness.")
     if policy["require_runnable_output"]:
-        instructions.append("Runnable-output policy: when the task behaves like a normal program, include the final call, usage path, or visible output step so the result actually runs or displays something.")
+        instructions.append("Runnable-output policy: include a final call, usage path, or visible output step only when the request explicitly asks for a runnable console/program output shape.")
     if policy["no_external_libraries"]:
         instructions.append("Strict policy: do not use external libraries, third-party packages, or framework imports unless the user explicitly provided them in attachments.")
     if policy["single_file_only"]:
@@ -756,6 +938,7 @@ def build_json_schema_instruction(compare_enabled):
             "Return valid JSON only. No markdown fences. "
             "Use this exact top-level shape: "
             '{"summary":"",'
+            '"usage":"",'
             '"notes":[""],'
             '"variants":['
             '{"label":"Primary","files":[{"path":"","content":"","role":"main"}]},'
@@ -765,7 +948,7 @@ def build_json_schema_instruction(compare_enabled):
 
     return (
         "Return valid JSON only. No markdown fences. "
-        'Use this exact top-level shape: {"summary":"","notes":[""],"files":[{"path":"","content":"","role":"main"}]}'
+        'Use this exact top-level shape: {"summary":"","usage":"","notes":[""],"files":[{"path":"","content":"","role":"main"}]}'
     )
 
 
@@ -835,11 +1018,13 @@ def build_messages(description, language, style, complexity, mode, framework, ed
             leetcode_problem_hint,
             f"Important: the requested language is {language}. Do not mix in syntax from any other language.",
             "Different settings must produce observably different structure.",
+            build_example_request_instruction(description, language, compare),
             "Prefer multiple files when the request naturally benefits from it.",
             "Prefer built-in language features and standard library solutions unless the user explicitly asks for a third-party package or framework.",
             "For basic arrays, loops, input, strings, math, or collection tasks, avoid external libraries unless they are clearly necessary.",
             "When UI is requested, split HTML/CSS/JS or component files when useful.",
             "When API is requested, split route/service/schema files when useful.",
+            "Fill the usage field with concise, practical instructions for how to run, call, test, or integrate the generated code.",
             "Return source code in file content fields only. Do not describe the code, announce the code, or explain what you are about to write.",
             "Do not write sentences like 'Here is the code' or 'The JavaScript code to...'.",
             build_json_schema_instruction(compare),
@@ -872,6 +1057,97 @@ def build_messages(description, language, style, complexity, mode, framework, ed
         {"role": "system", "content": system_message},
         {"role": "user", "content": user_content},
     ]
+
+
+def message_content_as_text(content):
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        item.get("text", "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text"
+    )
+
+
+def post_json(url, payload, headers):
+    request_body = json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json", **headers}
+    request_object = urllib.request.Request(url, data=request_body, headers=request_headers, method="POST")
+    try:
+        with urllib.request.urlopen(request_object, timeout=GROQ_REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        logger.warning("AI provider request failed. provider_error=%s", type(error).__name__)
+        raise ValueError("The selected AI provider could not complete the request. Check the API key, model, and provider quota.") from error
+
+
+def generate_with_provider(provider, api_key, model_name, messages, temperature):
+    provider = provider.strip().lower()
+    system_text = "\n".join(
+        message_content_as_text(message.get("content"))
+        for message in messages
+        if message.get("role") == "system"
+    )
+    user_text = "\n".join(
+        message_content_as_text(message.get("content"))
+        for message in messages
+        if message.get("role") != "system"
+    )
+
+    if provider == "groq":
+        completion = create_groq_client(api_key).chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+        )
+        return completion.choices[0].message.content or ""
+
+    if provider == "openai":
+        payload = {"model": model_name, "messages": messages, "temperature": temperature}
+        response = post_json(
+            "https://api.openai.com/v1/chat/completions",
+            payload,
+            {"Authorization": f"Bearer {api_key}"},
+        )
+        return response.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+
+    if provider == "anthropic":
+        response = post_json(
+            "https://api.anthropic.com/v1/messages",
+            {
+                "model": model_name,
+                "max_tokens": 8192,
+                "temperature": temperature,
+                "system": system_text,
+                "messages": [{"role": "user", "content": user_text}],
+            },
+            {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        )
+        return "".join(
+            item.get("text", "")
+            for item in response.get("content", [])
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+
+    if provider == "gemini":
+        response = post_json(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}",
+            {
+                "system_instruction": {"parts": [{"text": system_text}]},
+                "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+                "generationConfig": {"temperature": temperature},
+            },
+            {},
+        )
+        return "".join(
+            part.get("text", "")
+            for part in response.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            if isinstance(part, dict)
+        )
+
+    raise ValueError("Unsupported AI provider.")
 
 
 def parse_generation_output(raw_output, language, mode, compare_enabled):
@@ -959,6 +1235,7 @@ def extract_payload_from_wrapped_text(raw_text):
     role = file_match.group("role") or "main"
 
     summary_match = re.search(r'"summary"\s*:\s*"(?P<summary>(?:\\.|[^"])*)"', raw_text, re.DOTALL)
+    usage_match = re.search(r'"usage"\s*:\s*"(?P<usage>(?:\\.|[^"])*)"', raw_text, re.DOTALL)
     notes_match = re.findall(r'"notes"\s*:\s*\[(.*?)\]', raw_text, re.DOTALL)
     notes = []
     if notes_match:
@@ -966,6 +1243,7 @@ def extract_payload_from_wrapped_text(raw_text):
 
     return {
         "summary": bytes(summary_match.group("summary"), "utf-8").decode("unicode_escape") if summary_match else "Generated result",
+        "usage": bytes(usage_match.group("usage"), "utf-8").decode("unicode_escape") if usage_match else "",
         "notes": notes,
         "files": [{"path": path, "content": content, "role": role}],
     }
@@ -988,33 +1266,15 @@ def sanitize_file_entry(file_entry, fallback_name):
 
 
 def default_file_path(language, mode):
-    language = (language or "txt").lower()
     mode = (mode or "code").lower()
-    extension_map = {
-        "javascript": "js",
-        "typescript": "ts",
-        "python": "py",
-        "html/css": "html",
-        "react": "jsx",
-        "node.js": "js",
-        "c": "c",
-        "c++": "cpp",
-        "c#": "cs",
-        "go": "go",
-        "rust": "rs",
-        "java": "java",
-        "kotlin": "kt",
-        "swift": "swift",
-        "php": "php",
-        "ruby": "rb",
-        "dart": "dart",
-    }
-    extension = extension_map.get(language, "txt")
+    extension = default_language_extension(language)
 
     if mode == "component":
         return f"component.{extension}"
     if mode == "api":
         return f"api.{extension}"
+    if mode == "ascii-art":
+        return f"ascii_art.{extension}"
     return f"snippet.{extension}"
 
 
@@ -1030,12 +1290,14 @@ def build_fallback_response(raw_text, language, mode, compare_enabled):
     if compare_enabled:
         return {
             "summary": "Fallback single-variant response.",
+            "usage": "Review the primary file, then run or integrate it according to the target language and framework.",
             "notes": ["The model did not return structured JSON, so the raw output was captured as code."],
             "variants": [{"label": "Primary", "files": [fallback_file]}],
         }
 
     return {
         "summary": "Fallback single-file response.",
+        "usage": "Review the generated file, then run or integrate it according to the target language and framework.",
         "notes": ["The model did not return structured JSON, so the raw output was captured as code."],
         "files": [fallback_file],
     }
@@ -1222,7 +1484,7 @@ def looks_like_prose_response(content, normalized_language):
 
 
 def missing_entrypoint_or_output(content, normalized_language, normalized_mode, normalized_prompt):
-    if normalized_mode in {"leetcode", "api", "component"}:
+    if normalized_mode in {"leetcode", "api", "component", "ascii-art"}:
         return False
 
     text = (content or "").strip()
@@ -1231,7 +1493,7 @@ def missing_entrypoint_or_output(content, normalized_language, normalized_mode, 
 
     prompt_hints_execution = any(
         phrase in normalized_prompt
-        for phrase in ["input", "print", "show", "display", "output", "user", "create", "build"]
+        for phrase in ["input", "print", "output", "stdin", "stdout", "command line", "console", "terminal"]
     )
 
     patterns = {
@@ -1360,6 +1622,12 @@ def detect_mode_issues(content, path, normalized_language, normalized_prompt, po
         if re.search(r"\b(app|router)\.(get|post|put|patch|delete)\b|\bjsonify\b|\brequest\b|\bresponse\b", text) and not re.search(r"<(?:div|section|main|button|form)\b|\breturn\s*<|\bclassName\s*=", text):
             issues.append(f"{file_label} looks like backend route code instead of reusable UI/component output.")
 
+    if policy["prefer_ascii_art_output"]:
+        if re.search(r"<(?:html|body|main|div|section|form|button|canvas|svg)\b", text, re.IGNORECASE):
+            issues.append(f"{file_label} looks like webpage/UI output instead of ASCII art code.")
+        if not re.search(r"\bprint\s*\(|\bconsole\.log\s*\(|System\.out\.print|printf\s*\(|cout\s*<<|fmt\.Print|println!\s*\(|echo\b|puts\b|\bprintln\s*\(", text):
+            issues.append(f"{file_label} does not appear to produce visible symbol-based text output for ASCII art mode.")
+
     if policy["prefer_submission_shape"]:
         if re.search(r"```|^\s*(Explanation|Summary|How it works)\b", text, re.IGNORECASE | re.MULTILINE):
             issues.append(f"{file_label} includes explanatory wrapper text even though submission mode should return only the final answer.")
@@ -1442,6 +1710,11 @@ def normalize_model_payload(payload, language, mode, compare_enabled):
     if not isinstance(summary, str):
         summary = "Generated result"
 
+    usage = payload.get("usage", "")
+    if not isinstance(usage, str):
+        usage = ""
+    usage = usage.strip()
+
     notes = payload.get("notes", [])
     if not isinstance(notes, list):
         notes = []
@@ -1468,7 +1741,7 @@ def normalize_model_payload(payload, language, mode, compare_enabled):
         if not normalized_variants:
             return build_fallback_response("", language, mode, compare_enabled)
 
-        return {"summary": summary, "notes": notes, "variants": normalized_variants}
+        return {"summary": summary, "usage": usage, "notes": notes, "variants": normalized_variants}
 
     files = payload.get("files", [])
     if not isinstance(files, list):
@@ -1483,7 +1756,7 @@ def normalize_model_payload(payload, language, mode, compare_enabled):
     if not normalized_files:
         return build_fallback_response("", language, mode, compare_enabled)
 
-    return {"summary": summary, "notes": notes, "files": normalized_files}
+    return {"summary": summary, "usage": usage, "notes": notes, "files": normalized_files}
 
 
 def flatten_primary_files(payload):
@@ -1769,30 +2042,36 @@ def health():
     return jsonify(
         {
             "status": "ok",
-            "groq_configured": client is not None,
-            "allowed_origins": ALLOWED_ORIGINS,
-            "model": DEFAULT_MODEL,
-            "vision_model": VISION_MODEL,
-            "rate_limit": {
-                "window_seconds": RATE_LIMIT_WINDOW_SECONDS,
-                "max_requests": RATE_LIMIT_MAX_REQUESTS,
-            },
-            "runtimes": detect_runtimes(),
+            "byok_required": True,
+            "providers": sorted(SUPPORTED_AI_PROVIDERS),
+            "code_execution_enabled": ENABLE_CODE_EXECUTION,
         }
     )
+
+
+@app.get("/ready")
+def ready():
+    return jsonify({"status": "ready", "byok_required": True})
 
 
 @app.get("/runtimes")
 def runtimes():
     if not validate_origin():
         return error_response("Origin not allowed.", 403)
-    return jsonify({"runtimes": detect_runtimes(), "run_timeout_seconds": RUN_TIMEOUT_SECONDS})
+    if not ENABLE_CODE_EXECUTION:
+        return jsonify({"runtimes": {}, "code_execution_enabled": False})
+    return jsonify({"runtimes": detect_runtimes(), "run_timeout_seconds": RUN_TIMEOUT_SECONDS, "code_execution_enabled": True})
 
 
 @app.post("/run")
 def run_code():
     if not validate_origin():
         return error_response("Origin not allowed.", 403)
+    if not ENABLE_CODE_EXECUTION:
+        return error_response(
+            "Code execution is disabled on this deployment. Use an isolated execution service to enable it.",
+            403,
+        )
 
     data = request.get_json(silent=True)
     validation_error = validate_run_payload(data)
@@ -1830,10 +2109,6 @@ def generate():
     if not validate_origin():
         return error_response("Origin not allowed.", 403)
 
-    if client is None:
-        logger.error("GROQ_API_KEY is missing.")
-        return error_response("Server is not configured for AI generation.", 500)
-
     data = request.get_json(silent=True)
     validation_error = validate_generate_payload(data)
     if validation_error:
@@ -1862,14 +2137,18 @@ def generate():
     target_file = data.get("target_file", "")
     leetcode_problem_id = data.get("leetcode_problem_id", "")
     leetcode_question_name = data.get("leetcode_question_name", "")
+    provider = data["api_provider"].strip().lower()
+    api_key = data["api_key"].strip()
+    model_name = (data.get("model") or DEFAULT_PROVIDER_MODELS[provider]).strip()
 
     try:
         intent_info = detect_request_intent(description, data)
         policy = build_generation_policy(mode, description, edit_action, framework, language, attachments, strict_options)
-        model_name = VISION_MODEL if has_image_attachments(attachments) else DEFAULT_MODEL
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=build_messages(
+        if has_image_attachments(attachments) and provider != "groq":
+            return error_response("Image references are currently supported with a Groq API key only. Choose Groq or remove the image attachment.", 400)
+        if has_image_attachments(attachments) and not data.get("model"):
+            model_name = VISION_MODEL
+        messages = build_messages(
                 description=description,
                 language=language,
                 style=style,
@@ -1883,11 +2162,8 @@ def generate():
                 leetcode_problem_id=leetcode_problem_id,
                 leetcode_question_name=leetcode_question_name,
                 strict_options=strict_options,
-            ),
-            temperature=DEFAULT_TEMPERATURE,
         )
-
-        raw_output = completion.choices[0].message.content or ""
+        raw_output = generate_with_provider(provider, api_key, model_name, messages, DEFAULT_TEMPERATURE)
         normalized_payload = parse_generation_output(raw_output, language, mode, compare_enabled)
 
         validation_files = flatten_primary_files(normalized_payload)
@@ -1896,12 +2172,13 @@ def generate():
         validation_issues = dedupe_issues(validation_issues)
         if validation_issues:
             logger.warning("Generated output failed first-pass validation for %s: %s", language, " | ".join(validation_issues))
-            retry_completion = client.chat.completions.create(
-                model=model_name,
-                messages=build_retry_messages(language, mode, description, raw_output, compare_enabled, strict_options),
-                temperature=0,
+            retry_output = generate_with_provider(
+                provider,
+                api_key,
+                model_name,
+                build_retry_messages(language, mode, description, raw_output, compare_enabled, strict_options),
+                0,
             )
-            retry_output = retry_completion.choices[0].message.content or ""
             retry_payload = parse_generation_output(retry_output, language, mode, compare_enabled)
             retry_files = flatten_primary_files(retry_payload)
             retry_issues = detect_language_issues(language, retry_files, mode, description, strict_options)
@@ -1915,12 +2192,13 @@ def generate():
 
         if validation_issues:
             logger.warning("Generated output failed validation for %s: %s", language, " | ".join(validation_issues))
-            repair_completion = client.chat.completions.create(
-                model=model_name,
-                messages=build_repair_messages(language, mode, description, normalized_payload, validation_issues, strict_options),
-                temperature=0,
+            repair_output = generate_with_provider(
+                provider,
+                api_key,
+                model_name,
+                build_repair_messages(language, mode, description, normalized_payload, validation_issues, strict_options),
+                0,
             )
-            repair_output = repair_completion.choices[0].message.content or ""
             repaired_payload = extract_json_object(repair_output) or extract_payload_from_wrapped_text(repair_output)
             if repaired_payload is not None:
                 normalized_payload = normalize_model_payload(repaired_payload, language, mode, compare_enabled)
@@ -1937,6 +2215,7 @@ def generate():
         response_payload = {
             "code": primary_code,
             "summary": normalized_payload.get("summary", "Generated result"),
+            "usage": normalized_payload.get("usage", ""),
             "notes": response_notes,
             "sections": build_section_index(primary_files),
             "raw_model_output": raw_output,
@@ -1948,6 +2227,7 @@ def generate():
             "mode": mode,
             "framework": framework,
             "model": model_name,
+            "provider": provider,
             "edit_action": edit_action,
             "compare": compare_enabled,
         }
@@ -1961,8 +2241,9 @@ def generate():
         for key, value in rate_limit_headers(remaining).items():
             response.headers[key] = value
         return response
-    except Exception:
-        logger.exception("Groq generation failed.")
+    except Exception as error:
+        # Do not log exception text here: provider exceptions can contain request details.
+        logger.error("AI generation failed. request_id=%s error_type=%s", g.request_id, type(error).__name__)
         message = "AI generation failed. Please try again."
         if app.config["DEV_ERROR_DETAILS"]:
             import traceback
@@ -1972,4 +2253,4 @@ def generate():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "5000")), debug=not IS_PRODUCTION)

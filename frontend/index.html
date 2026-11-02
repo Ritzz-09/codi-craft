@@ -7,7 +7,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=ux-6">
+  <script src="config.js"></script>
+  <link rel="stylesheet" href="hierarchy.css?v=wizard-6">
+  <script src="hierarchy.js?v=wizard-6" defer></script>
+  <link rel="stylesheet" href="side-hub.css?v=side-hub-4">
+  <script src="side-hub.js?v=side-hub-4" defer></script>
 </head>
 <body>
   <canvas id="stars"></canvas>
@@ -32,6 +37,15 @@
         <img src="symbol.png" alt="Codi Craft logo" class="logo">
         <div>
           <h1>Codi Craft</h1>
+          <p class="brand-subtitle">Build ideas into working software — one focused choice at a time.</p>
+        </div>
+      </div>
+      <div class="topbar-message" aria-label="Codi Craft promise">
+        <span class="message-kicker">YOUR BUILD SPACE</span>
+        <strong id="messageLead">One clear thought. A working next step.</strong>
+        <div class="message-chips" id="messageChips">
+          <span>Think less. Make more.</span>
+          <span>From blank page to build plan.</span>
         </div>
       </div>
       <div class="topbar-meta">
@@ -104,6 +118,38 @@
             </div>
           </div>
 
+          <div class="control-card control-card-wide provider-card">
+            <div class="provider-heading">
+              <div>
+                <span>Your AI provider</span>
+                <p>Use your own key. It is used only for this request and is never saved.</p>
+              </div>
+              <span class="provider-badge">BYOK</span>
+            </div>
+            <div class="provider-fields">
+              <label class="field">
+                <span>Provider</span>
+                <select id="apiProvider">
+                  <option value="groq">Groq</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Google Gemini</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Model</span>
+                <input id="modelName" type="text" autocomplete="off" spellcheck="false" value="llama-3.3-70b-versatile">
+              </label>
+              <label class="field provider-key-field">
+                <span>API key</span>
+                <div class="api-key-control">
+                  <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key for this session">
+                  <button class="ghost-btn" id="clearApiKeyBtn" type="button">Clear</button>
+                </div>
+              </label>
+            </div>
+          </div>
+
           <div class="control-card">
             <label class="field">
               <span>Task</span>
@@ -166,6 +212,7 @@
                 <option>Minimal</option>
                 <option>Readable</option>
                 <option>Fast prototype</option>
+                <option>Highly Efficient</option>
               </select>
             </label>
           </div>
@@ -189,6 +236,7 @@
                 <button class="toggle-chip active" type="button" data-mode="code">Code</button>
                 <button class="toggle-chip" type="button" data-mode="component">Component</button>
                 <button class="toggle-chip" type="button" data-mode="api">API</button>
+                <button class="toggle-chip" type="button" data-mode="ascii-art">ASCII Art</button>
                 <button class="toggle-chip" type="button" data-mode="leetcode">LeetCode</button>
               </div>
             </label>
@@ -376,6 +424,7 @@
           <div class="output-tabs" id="outputTabs">
             <button class="output-tab active" type="button" data-tab="code">Code</button>
             <button class="output-tab" type="button" data-tab="editor">Editor</button>
+            <button class="output-tab" type="button" data-tab="usage">How To Use</button>
             <button class="output-tab" type="button" data-tab="diff">Diff</button>
             <button class="output-tab" type="button" data-tab="explain">Explain</button>
             <button class="output-tab" type="button" data-tab="diagnostics">Diagnostics</button>
@@ -402,6 +451,9 @@
             </div>
             <div class="output-panel" id="tab-editor">
               <textarea id="editorArea" spellcheck="false">// Your generated result will appear here.</textarea>
+            </div>
+            <div class="output-panel" id="tab-usage">
+              <pre id="usageView">Usage guidance will appear here.</pre>
             </div>
             <div class="output-panel" id="tab-diff">
               <div class="diff-layout">
@@ -526,6 +578,6 @@
     </main>
   </div>
 
-  <script src="script.js?v=2026-04-03-strict-layout-2"></script>
+  <script src="script.js?v=2026-11-02-engage-1"></script>
 </body>
 </html>

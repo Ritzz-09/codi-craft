@@ -1,0 +1,10 @@
+.git
+.github
+.venv
+backend/.env
+**/__pycache__
+**/*.py[cod]
+data
+uploads
+exports
+*.log

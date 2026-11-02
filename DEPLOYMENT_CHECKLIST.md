@@ -7,16 +7,17 @@
 - Restrict `ALLOWED_ORIGINS` to production domains only
 
 ## Backend
-- Run behind a production WSGI server
-- Add request logging
-- Add structured error logging
+- Run the included Gunicorn container behind an HTTPS reverse proxy
+- Configure `/health` for liveness and `/ready` for readiness probes
+- Keep `ENABLE_CODE_EXECUTION=false`; use an isolated runner service before enabling code execution
+- Set `MAX_REQUEST_BYTES`, prompt limits, and reverse-proxy body limits consistently
+- Replace the in-memory rate limiter with Redis-backed limiting before horizontally scaling
 - Add Sentry
-- Add Redis-backed rate limiting
 - Add persistent database connection configuration
 
 ## Frontend
 - Serve over HTTPS only
-- Set API base URL via environment config
+- Set the public API origin in `frontend/config.js` during deployment
 - Add analytics only after privacy review
 
 ## Security
@@ -27,6 +28,7 @@
 - Add file size limits
 - Add MIME validation for uploads
 - Add CSP headers
+- Set `TRUST_PROXY_HEADERS=true` only when a trusted proxy overwrites forwarding headers
 
 ## Persistence
 - Provision PostgreSQL

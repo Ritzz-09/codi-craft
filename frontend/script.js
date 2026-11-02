@@ -1,3 +1,4 @@
+const API_BASE_URL = String(window.CODICRAFT_CONFIG?.apiBaseUrl || "http://127.0.0.1:5000").replace(/\/$/, "");
 const canvas = document.getElementById("stars");
 const ctx = canvas.getContext("2d");
 const promptInput = document.getElementById("prompt");
@@ -23,6 +24,10 @@ const strictSingleFileInput = document.getElementById("strictSingleFile");
 const studioModeToggle = document.getElementById("studioModeToggle");
 const testCasesInput = document.getElementById("testCasesInput");
 const expectedOutputInput = document.getElementById("expectedOutputInput");
+const apiProviderSelect = document.getElementById("apiProvider");
+const modelNameInput = document.getElementById("modelName");
+const apiKeyInput = document.getElementById("apiKey");
+const clearApiKeyBtn = document.getElementById("clearApiKeyBtn");
 const promptHealth = document.getElementById("promptHealth");
 const outputEstimate = document.getElementById("outputEstimate");
 const codeContent = document.getElementById("codeContent");
@@ -63,6 +68,7 @@ const explainModeSelect = document.getElementById("explainMode");
 const requestView = document.getElementById("requestView");
 const structureView = document.getElementById("structureView");
 const filesView = document.getElementById("filesView");
+const usageView = document.getElementById("usageView");
 const explainView = document.getElementById("explainView");
 const diagnosticsView = document.getElementById("diagnosticsView");
 const runView = document.getElementById("runView");
@@ -95,6 +101,8 @@ const scene3D = document.querySelector(".scene-3d");
 const gridPlanes = document.querySelectorAll(".grid-plane");
 const orbs = document.querySelectorAll(".orb");
 const beams = document.querySelectorAll(".beam");
+const messageLead = document.getElementById("messageLead");
+const messageChips = document.getElementById("messageChips");
 
 const complexityMap = { 1: "Starter", 2: "Balanced", 3: "Advanced" };
 const TEXT_ATTACHMENT_EXTENSIONS = new Set(["txt", "md", "json", "js", "jsx", "ts", "tsx", "py", "html", "css", "scss", "java", "cpp", "c", "cs", "go", "rs", "php", "rb", "xml", "yaml", "yml", "sql"]);
@@ -106,8 +114,19 @@ const MAX_ATTACHMENTS = 5;
 const MAX_TEXT_ATTACHMENT_CHARS = 5000;
 const MAX_HISTORY_ITEMS = 8;
 const MAX_IMAGE_DATA_URL_CHARS = 6_000_000;
+const PROVIDER_DEFAULT_MODELS = {
+  groq: "llama-3.3-70b-versatile",
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.5-flash"
+};
 const CODING_SCOPE_TERMS = ["algorithm", "api", "app", "array", "build", "bug", "class", "code", "coding", "compile", "component", "console", "css", "database", "debug", "endpoint", "fix", "frontend", "function", "html", "implement", "input", "javascript", "js", "leetcode", "loop", "method", "node", "object", "output", "print", "program", "programming", "python", "react", "refactor", "return", "script", "server", "software", "sql", "syntax", "test", "typescript", "ui", "variable", "web", "website"];
 const GENERAL_KNOWLEDGE_QUESTION_PATTERN = /^(what|who|when|where|why|how)\s+(is|are|was|were|do|does|did|can|could)\b/i;
+const BRAND_MESSAGES = [
+  { lead: "One clear thought. A working next step.", chips: ["Think less. Make more.", "From blank page to build plan."] },
+  { lead: "Make the first version feel inevitable.", chips: ["Guide the idea.", "Keep the momentum."] },
+  { lead: "Your next build starts with one brave prompt.", chips: ["Choose a direction.", "Let the structure follow."] }
+];
 
 const presetTemplates = {
   None: [
@@ -150,6 +169,11 @@ const presetTemplates = {
     "Build a plain {{language}} program with simple logic and no external libraries.",
     "Create a vanilla {{language}} app that takes input, processes it, and shows the result clearly.",
     "Write a {{language}} beginner example that uses loops, conditions, and output in one file."
+  ],
+  "ASCII Art": [
+    "Use an attached image as reference and generate {{language}} code that prints the same shape as ASCII art using symbols.",
+    "Create {{language}} code that prints an apple shape using only characters such as *, #, and spaces.",
+    "Build a {{language}} console program that outputs recognizable text art from a described object."
   ]
 };
 
@@ -344,7 +368,7 @@ function updateFocusFileOptions() {
 }
 
 function createEmptyResult() {
-  return { summary: "", notes: [], warnings: [], intent: "generate_code", studioMode: "standard", strictOptions: {}, variants: [{ label: "Primary", files: [{ path: "snippet.txt", content: "// Your generated result will appear here.", role: "main" }] }] };
+  return { summary: "", usage: "", notes: [], warnings: [], intent: "generate_code", studioMode: "standard", strictOptions: {}, variants: [{ label: "Primary", files: [{ path: "snippet.txt", content: "// Your generated result will appear here.", role: "main" }] }] };
 }
 
 function escapeHtml(value) {
@@ -591,6 +615,22 @@ function setStatus(message, meta, progress) {
   progressBar.style.width = `${progress}%`;
 }
 
+function startBrandMessageCycle() {
+  if (!messageLead || !messageChips || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  let currentMessage = 0;
+  window.setInterval(() => {
+    currentMessage = (currentMessage + 1) % BRAND_MESSAGES.length;
+    const message = BRAND_MESSAGES[currentMessage];
+    messageLead.classList.remove("message-swap");
+    messageChips.classList.remove("message-swap");
+    void messageLead.offsetWidth;
+    messageLead.textContent = message.lead;
+    messageChips.innerHTML = message.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("");
+    messageLead.classList.add("message-swap");
+    messageChips.classList.add("message-swap");
+  }, 5200);
+}
+
 function setBackendStatus(state, text) {
   backendStatusText.textContent = text;
   backendStatusPill.dataset.state = state;
@@ -604,20 +644,35 @@ function updateRunButtonVisibility() {
   return;
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("The server took too long to respond. Please try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function checkBackendHealth() {
   try {
-    const response = await fetch("http://127.0.0.1:5000/health");
+    const response = await fetchWithTimeout(`${API_BASE_URL}/health`, {}, 8000);
     const data = await response.json();
     if (!response.ok) {
       setBackendStatus("error", "Backend error");
       return;
     }
-    if (!data.groq_configured) {
-      setBackendStatus("warning", "Add GROQ_API_KEY");
+    if (!data.byok_required) {
+      setBackendStatus("error", "AI configuration error");
       return;
     }
-    backendModelName = data.model || backendModelName;
-    runtimeAvailability = data.runtimes || {};
+    backendModelName = modelNameInput.value || backendModelName;
+    runtimeAvailability = {};
     renderRuntimeStatus();
     updateRunButtonVisibility();
     setBackendStatus("ready", "AI Ready");
@@ -631,11 +686,12 @@ async function checkBackendHealth() {
 
 function setMode(mode) {
   selectedMode = mode;
-  modeBadge.textContent = mode === "leetcode" ? "LeetCode" : mode.charAt(0).toUpperCase() + mode.slice(1);
+  modeBadge.textContent = mode === "leetcode" ? "LeetCode" : mode === "ascii-art" ? "ASCII Art" : mode.charAt(0).toUpperCase() + mode.slice(1);
   modeToggle.querySelectorAll(".toggle-chip").forEach((button) => {
     button.classList.toggle("active", button.dataset.mode === mode);
   });
   leetcodeProblemCard.hidden = mode !== "leetcode";
+  renderPresetChips();
 }
 
 function setStudioMode(mode) {
@@ -733,8 +789,8 @@ function buildPromptFromTemplate(template) {
 
 function isCodingPrompt(prompt) {
   const value = (prompt || "").trim().toLowerCase();
-  if (!value) return false;
-  if (selectedMode === "leetcode" || selectedAttachments.length) return true;
+  if (!value) return selectedAttachments.length > 0 || selectedMode === "ascii-art";
+  if (selectedMode === "leetcode" || selectedMode === "ascii-art" || selectedAttachments.length) return true;
   if (CODING_SCOPE_TERMS.some((term) => value.includes(term))) return true;
   if (GENERAL_KNOWLEDGE_QUESTION_PATTERN.test(value)) return false;
   return false;
@@ -742,7 +798,9 @@ function isCodingPrompt(prompt) {
 
 function renderPresetChips() {
   const row = document.getElementById("presetChips");
-  const templates = presetTemplates[frameworkSelect.value] || presetTemplates.None;
+  const templates = selectedMode === "ascii-art"
+    ? presetTemplates["ASCII Art"]
+    : presetTemplates[frameworkSelect.value] || presetTemplates.None;
   row.innerHTML = templates.map((template, index) => `<button class="prompt-chip" type="button" data-template="${escapeAttribute(template)}">Template ${index + 1}</button>`).join("");
   row.querySelectorAll(".prompt-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -1034,6 +1092,93 @@ function buildFilesView() {
   return files.map((file) => `// FILE: ${file.path}\n${file.content}`).join("\n\n");
 }
 
+function buildSuggestedRunCommand(language, filePath, framework) {
+  const normalizedFramework = String(framework || "").toLowerCase();
+  if (!filePath) return "";
+  if (selectedMode === "ascii-art") {
+    if (language === "Python") return `python ${filePath}`;
+    if (language === "JavaScript" || language === "Node.js") return `node ${filePath}`;
+    if (language === "C") return `gcc ${filePath} -o art && .\\art`;
+    if (language === "C++") return `g++ ${filePath} -o art && .\\art`;
+    if (language === "Java") return `javac ${filePath} && java ${filePath.replace(/\.java$/i, "")}`;
+  }
+  if (normalizedFramework === "flask") return "python app.py";
+  if (normalizedFramework === "express") return "node server.js";
+  if (language === "Python") return `python ${filePath}`;
+  if (language === "JavaScript" || language === "Node.js") return `node ${filePath}`;
+  if (language === "TypeScript") return `npx tsx ${filePath}`;
+  if (language === "C") return `gcc ${filePath} -o program && .\\program`;
+  if (language === "C++") return `g++ ${filePath} -o program && .\\program`;
+  if (language === "Java") return `javac ${filePath} && java ${filePath.replace(/\.java$/i, "")}`;
+  if (language === "Go") return `go run ${filePath}`;
+  if (language === "Rust") return `rustc ${filePath} && .\\${filePath.replace(/\.rs$/i, "")}`;
+  return "";
+}
+
+function estimateComplexitySummary(files) {
+  const combined = (files || []).map((file) => file.content || "").join("\n");
+  if (!combined.trim()) {
+    return { time: "Unknown", space: "Unknown", note: "No generated code yet." };
+  }
+
+  const nestedLoopCount = (combined.match(/for[\s\S]{0,120}for|while[\s\S]{0,120}while|for[\s\S]{0,120}while|while[\s\S]{0,120}for/g) || []).length;
+  const recursiveSignals = (combined.match(/\b(def|function|func|fn)\s+([A-Za-z_]\w*)/g) || []).length > 0
+    && /\breturn\b[\s\S]{0,120}\b[A-Za-z_]\w*\s*\(/.test(combined);
+  const sortSignal = /\bsort(ed)?\s*\(|Arrays\.sort|Collections\.sort|std::sort|qsort|\.sort\(/.test(combined);
+  const mapSetSignal = /\b(dict|set|Map|Set|HashMap|HashSet|unordered_map|unordered_set)\b/.test(combined);
+
+  let time = "Likely O(n)";
+  let space = mapSetSignal ? "Likely O(n)" : "Likely O(1) to O(n)";
+  let note = "Heuristic estimate based on visible loops and data structures.";
+
+  if (nestedLoopCount > 0) {
+    time = "Likely O(n^2) or worse";
+  } else if (sortSignal) {
+    time = "Likely O(n log n)";
+  } else if (recursiveSignals) {
+    time = "Likely recursive; check branching for exact cost";
+    note = "Recursion was detected, so exact complexity depends on branching and memoization.";
+  }
+
+  return { time, space, note };
+}
+
+function buildUsageView() {
+  const files = getCurrentFiles();
+  const file = getCurrentFile();
+  const suggestedCommand = buildSuggestedRunCommand(languageSelect.value, file?.path || "", frameworkSelect.value);
+  const generatedUsage = String(generationResult.usage || "").trim();
+  const complexity = estimateComplexitySummary(files);
+  const usageLines = generatedUsage
+    ? [generatedUsage]
+    : [
+        `Primary file: ${file?.path || "Not available yet"}`,
+        selectedMode === "leetcode"
+          ? "Use the returned method/class directly in the LeetCode editor without adding extra driver code."
+          : selectedMode === "ascii-art"
+            ? "Run the program in a console to print the symbol-based art output."
+            : frameworkSelect.value === "React" || frameworkSelect.value === "Next.js" || frameworkSelect.value === "Vue"
+              ? "Place the generated file in your frontend project and import or render the main component where needed."
+              : frameworkSelect.value === "Flask" || frameworkSelect.value === "Express"
+                ? "Add the generated file to your backend project, then wire the route or handler into your server entrypoint."
+                : "Run or call the main function/class in the generated file from your project or terminal."
+      ];
+
+  if (suggestedCommand) {
+    usageLines.push(`Suggested command: ${suggestedCommand}`);
+  }
+
+  if (testCasesInput.value.trim()) {
+    usageLines.push(`Suggested input: ${testCasesInput.value.trim()}`);
+  }
+
+  usageLines.push(`Estimated time complexity: ${complexity.time}`);
+  usageLines.push(`Estimated space complexity: ${complexity.space}`);
+  usageLines.push(`Complexity note: ${complexity.note}`);
+
+  return usageLines.filter(Boolean).join("\n\n");
+}
+
 function buildPromptRecipeGuide() {
   const task = editActionSelect.value;
   const language = languageSelect.value;
@@ -1042,11 +1187,13 @@ function buildPromptRecipeGuide() {
   const mentionsOutput = /print|show|display|return|output|result/i.test(prompt);
 
   return {
-    title: `${task[0].toUpperCase()}${task.slice(1)} + ${language} + ${selectedMode === "leetcode" ? "LeetCode format" : "result"}`,
+    title: `${task[0].toUpperCase()}${task.slice(1)} + ${language} + ${selectedMode === "leetcode" ? "LeetCode format" : selectedMode === "ascii-art" ? "ASCII art output" : "result"}`,
     hint: mentionsInput && mentionsOutput
       ? "Nice. Your prompt already says what goes in and what should come out."
       : selectedMode === "leetcode"
         ? "For LeetCode mode, mention the problem goal, the input shape, and the expected return value."
+        : selectedMode === "ascii-art"
+          ? "For ASCII Art mode, mention the subject, preferred symbols, and whether to use an attached image as the shape reference."
         : "Best prompt formula: what it starts with, what should happen, and what result you want."
   };
 }
@@ -1061,6 +1208,8 @@ function buildLearningFocusSummary() {
       ? "Practice explaining the approach, tradeoffs, and complexity clearly"
       : selectedStudioMode === "ui-builder"
         ? "Recreate visible layout and interaction details from screenshots"
+      : selectedMode === "ascii-art"
+        ? `Generate ${language} code that prints recognizable ASCII art with symbols`
       : task === "explain"
     ? "Understand the idea before the syntax"
     : task === "fix"
@@ -1539,7 +1688,10 @@ function buildDiagnosticsView() {
   const risks = [];
   const selectedLanguage = languageSelect.value;
   const runtime = runtimeAvailability[selectedLanguage];
+  const complexity = estimateComplexitySummary(files);
   strengths.push(`Studio mode: ${selectedStudioMode}`);
+  strengths.push(`Estimated time complexity: ${complexity.time}`);
+  strengths.push(`Estimated space complexity: ${complexity.space}`);
   if (runtime) {
     strengths.push(`Runtime: ${runtime.available ? "available in app" : "not detected on this machine"}`);
   } else {
@@ -1572,6 +1724,12 @@ function buildDiagnosticsView() {
     if (selectedMode === "leetcode" && /print\s*\(|console\.log|System\.out\.print/.test(content)) {
       risks.push(`${file.path}: LeetCode mode usually should not include extra output statements`);
     }
+    if (selectedMode === "ascii-art" && !/\bprint\s*\(|\bconsole\.log\s*\(|System\.out\.print|printf\s*\(|cout\s*<<|fmt\.Print|println!\s*\(|echo\b|puts\b|\bprintln\s*\(/.test(content)) {
+      risks.push(`${file.path}: ASCII Art mode should usually include visible symbol-based output`);
+    }
+    if (selectedMode === "ascii-art" && /<(html|body|main|div|section|canvas|svg)\b/i.test(content)) {
+      risks.push(`${file.path}: ASCII Art mode returned UI markup instead of printable text art`);
+    }
     const mismatch = detectLanguageMismatch(selectedLanguage, content, file.path);
     if (mismatch) {
       risks.push(mismatch);
@@ -1597,6 +1755,9 @@ function buildDiagnosticsView() {
     if (/^\s*def\s+\w+\(/m.test(content) && !/^\s*\w+\s*=\s*\w+\(|^\s*\w+\s*\(|if __name__ == ['"]__main__['"]:/m.test(content) && selectedMode === "code") {
       risks.push(`${file.path}: defines a function but may never call it`);
     }
+    if (toneSelect.value === "Highly Efficient" && /(\.append\(|push\(|\+\=|\=\s*\[.*for .* in .*for )/.test(content) && complexity.time === "Likely O(n^2) or worse") {
+      risks.push(`${file.path}: highly efficient mode is active, but the visible structure may still be more expensive than needed`);
+    }
   });
 
   const uniqueStrengths = [...new Set(strengths)];
@@ -1619,6 +1780,8 @@ function buildDiagnosticsView() {
     "",
     "Problems to fix:",
     uniqueRisks.length ? uniqueRisks.map((item) => `- ${item}`).join("\n") : "- No obvious local problems found.",
+    "",
+    `Complexity note: ${complexity.note}`,
     "",
     nextStep,
     "",
@@ -1910,6 +2073,9 @@ function renderOutput() {
   requestView.textContent = buildRequestSummary();
   structureView.textContent = buildStructureSummary();
   filesView.textContent = buildFilesView();
+  if (usageView) {
+    usageView.textContent = buildUsageView();
+  }
   explainView.textContent = buildExplainView();
   diagnosticsView.textContent = buildDiagnosticsView();
   if (runView) {
@@ -1979,6 +2145,7 @@ function normalizeResult(data) {
   if (!normalizedVariants.length) {
     return {
       summary: data.summary || "Generated result",
+      usage: typeof data.usage === "string" ? data.usage : "",
       notes: Array.isArray(data.notes) ? data.notes : [],
       warnings: inferWarnings({ notes: Array.isArray(data.notes) ? data.notes : [], variants: [{ files: [{ path: `snippet.${getLanguageExtension(languageSelect.value)}`, content: fallbackContent, role: "main" }] }] }),
       intent: data.intent || "generate_code",
@@ -1990,6 +2157,7 @@ function normalizeResult(data) {
 
   return {
     summary: data.summary || "Generated result",
+    usage: typeof data.usage === "string" ? data.usage : "",
     notes: Array.isArray(data.notes) ? data.notes : [],
     warnings: inferWarnings({ notes: Array.isArray(data.notes) ? data.notes : [], variants: normalizedVariants }),
     intent: data.intent || "generate_code",
@@ -2010,6 +2178,8 @@ function composePrompt() {
     `Mode: ${selectedMode}.`,
     `Studio mode: ${selectedStudioMode}.`,
     selectedMode === "leetcode" ? "Return the exact code format expected by LeetCode for the selected language. Do not add driver code unless the problem explicitly needs it." : "",
+    selectedMode === "ascii-art" ? "Return code that prints ASCII art or symbol art only. Use any attached image as shape reference, not as a UI mockup. Prefer characters like *, #, @, ., and spaces." : "",
+    toneSelect.value === "Highly Efficient" ? "Prioritize highly efficient code. Prefer strong time and space complexity, fewer passes, and performance-conscious data structures." : "",
     selectedStudioMode === "submission" ? "Return submission-ready code only. Avoid explanatory prose, sample runs, and driver code unless required." : "",
     selectedStudioMode === "interview" ? "Favor a clean interview-ready answer, with sensible naming and an efficient approach." : "",
     selectedStudioMode === "learning" ? "Favor beginner-friendly structure and readable steps over clever shortcuts." : "",
@@ -2392,12 +2562,17 @@ async function requestGeneration({ promptOverride = "", editActionOverride = "",
     showToast("Backend is not ready for AI generation.");
     return false;
   }
-  if (!prompt) {
+  if (!apiKeyInput.value.trim()) {
+    showToast("Paste an API key for your selected provider. Your key is not saved.");
+    apiKeyInput.focus();
+    return false;
+  }
+  if (!prompt && !selectedAttachments.length) {
     showToast("Add a prompt before generating.");
     promptInput.focus();
     return false;
   }
-  if (!isCodingPrompt(promptInput.value.trim())) {
+  if (!isCodingPrompt(prompt)) {
     const message = "This studio only handles coding requests. Try asking it to build, explain, fix, or refactor code.";
     setStatus("Coding prompt required.", "Blocked", 100);
     previewTitle.textContent = "Coding Prompt Needed";
@@ -2413,7 +2588,7 @@ async function requestGeneration({ promptOverride = "", editActionOverride = "",
   setStatus(compareEnabled ? "Generating both variants..." : "Generating files...", "Thinking", 42);
 
   try {
-    const response = await fetch("http://127.0.0.1:5000/generate", {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2429,6 +2604,9 @@ async function requestGeneration({ promptOverride = "", editActionOverride = "",
         target_file: focusFileSelect.value,
         leetcode_problem_id: leetcodeProblemIdInput.value.trim(),
         leetcode_question_name: leetcodeQuestionNameInput.value.trim(),
+        api_provider: apiProviderSelect.value,
+        api_key: apiKeyInput.value.trim(),
+        model: modelNameInput.value.trim(),
         strict_options: {
           no_external_libraries: Boolean(strictNoLibrariesInput?.checked),
           runnable_output_required: Boolean(strictRunnableOutputInput?.checked),
@@ -2436,7 +2614,7 @@ async function requestGeneration({ promptOverride = "", editActionOverride = "",
         },
         attachments: [...buildAttachmentPayload(), ...extraAttachments]
       })
-    });
+    }, 60000);
 
     const data = await response.json();
     if (!response.ok) {
@@ -2486,7 +2664,7 @@ async function runCurrentCode() {
   }
   setStatus("Running current code...", "Execution", 72);
   try {
-    const response = await fetch("http://127.0.0.1:5000/run", {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2495,7 +2673,7 @@ async function runCurrentCode() {
         code: currentFile.content,
         stdin: testCasesInput.value
       })
-    });
+    }, 15000);
     const data = await response.json();
     lastRunResult = data;
     renderOutput();
@@ -2699,6 +2877,16 @@ workspaceNameInput.addEventListener("input", syncComposerState);
 focusFileSelect.addEventListener("change", syncComposerState);
 testCasesInput.addEventListener("input", syncComposerState);
 expectedOutputInput.addEventListener("input", syncComposerState);
+apiProviderSelect.addEventListener("change", () => {
+  modelNameInput.value = PROVIDER_DEFAULT_MODELS[apiProviderSelect.value] || "";
+  apiKeyInput.value = "";
+  showToast("Provider changed. Paste that provider's API key; it will not be saved.");
+});
+clearApiKeyBtn.addEventListener("click", () => {
+  apiKeyInput.value = "";
+  apiKeyInput.focus();
+  showToast("API key cleared from this page.");
+});
 editorArea.addEventListener("input", () => {
   const currentFile = updateCurrentFileContent(editorArea.value);
   if (!currentFile) {
@@ -2797,4 +2985,5 @@ renderOutput();
 setOutputTab("code");
 setStatus("Waiting for your prompt.", "Idle", 0);
 setBackendStatus("warning", "Checking AI status...");
+startBrandMessageCycle();
 checkBackendHealth();
