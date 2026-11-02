@@ -58,6 +58,9 @@ Working today:
 - Multiple coding and learning modes
 - Attachment-aware prompting
 - Local save/history behavior
+- Guided, installer-style setup flow with one configuration stage at a time
+- Compact workspace tabs for notes, learning guidance, projects, history, and prompt versions
+- Local container, health-check, CI, and regression-test baseline
 
 Not finished yet:
 - Authentication
@@ -68,6 +71,13 @@ Not finished yet:
 - Full production security hardening
 
 More planning notes are available in [LAUNCH_READINESS.md](./LAUNCH_READINESS.md), [DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md), and [DATA_MODEL.md](./DATA_MODEL.md).
+
+## Security and privacy
+
+- Users supply their own provider keys for each generation; the application does not use a shared AI key.
+- Keys are not stored in browser history, local storage, saved projects, API responses, or application logs.
+- Local `.env` files, deployment metadata, credential files, private keys, and secret stores are ignored by Git.
+- Serve the application over HTTPS in any hosted environment.
 
 ## Local Setup
 
